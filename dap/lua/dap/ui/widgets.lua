@@ -1,0 +1,813 @@
+-- #################################################################
+-- /qompassai/lua/dap/ui/widgets.lua
+-- Qompass AI Widgets
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright (c) 2026 Qompass AI
+--
+-- Licensed under the Apache License, Version 2.0 (the "License");
+-- you may not use this file except in compliance with the License.
+-- You may obtain a copy of the License at:
+--   http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing, software
+-- distributed under the License is distributed on an "AS IS" BASIS,
+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-- See the License for the specific language governing permissions and
+-- limitations under the License.
+-- #################################################################
+local ui = require('dap.ui')
+local utils = require('dap.utils')
+local api = vim.api
+local M = {}
+
+local function set_default_bufopts(buf)
+    vim.bo[buf].modifiable = false
+    vim.bo[buf].buftype = 'nofile'
+    local trigger_first = "<Cmd>lua require('dap.ui').trigger_actions({ mode = 'first' })<CR>"
+    local trigger = "<Cmd>lua require('dap.ui').trigger_actions()<CR>"
+    api.nvim_buf_set_keymap(buf, 'n', '<CR>', trigger_first, {})
+    api.nvim_buf_set_keymap(buf, 'n', 'a', trigger, {})
+    api.nvim_buf_set_keymap(buf, 'n', 'o', trigger, {})
+    api.nvim_buf_set_keymap(buf, 'n', '<2-LeftMouse>', trigger, {})
+end
+local function new_buf()
+    local buf = api.nvim_create_buf(false, true)
+    set_default_bufopts(buf)
+    return buf
+end
+
+---@param buf integer buffer the window displays
+---@param win integer window to configure as a DAP float
+---@return integer win the configured window
+local function setup_float_win(buf, win)
+    vim.bo[buf].bufhidden = 'wipe'
+    vim.wo[win][0].scrolloff = 0
+    vim.wo[win][0].wrap = false
+    vim.bo[buf].filetype = 'dap-float'
+    return win
+end
+
+function M.new_cursor_anchored_float_win(buf)
+    local border = vim.fn.exists('&winborder') == 1 and vim.o.winborder or 'single'
+    local opts = vim.lsp.util.make_floating_popup_options(50, 30, { border = border })
+    local win = api.nvim_open_win(buf, true, opts)
+    return setup_float_win(buf, win)
+end
+
+function M.new_centered_float_win(buf)
+    local columns = vim.o.columns
+    local lines = vim.o.lines
+    local width = math.floor(columns * 0.9)
+    local height = math.floor(lines * 0.8)
+    local border = vim.fn.exists('&winborder') == 1 and vim.o.winborder or 'single'
+    local opts = {
+        relative = 'editor',
+        style = 'minimal',
+        row = math.floor((lines - height) * 0.5),
+        col = math.floor((columns - width) * 0.5),
+        width = width,
+        height = height,
+        border = border,
+    }
+    local win = api.nvim_open_win(buf, true, opts)
+    return setup_float_win(buf, win)
+end
+
+local function with_winopts(new_win, winopts)
+    return function(...)
+        local win = new_win(...)
+        ui.apply_winopts(win, winopts)
+        return win
+    end
+end
+local function mk_sidebar_win_func(winopts, wincmd)
+    return function()
+        vim.cmd(wincmd or '30 vsplit')
+        local win = api.nvim_get_current_win()
+        vim.wo[win].number = false
+        vim.wo[win].relativenumber = false
+        vim.wo[win].statusline = ' '
+        ui.apply_winopts(win, winopts)
+        return win
+    end
+end
+--- Decorates a `new_win` function, adding a hook that will cause the window to
+-- be resized if the content changes.
+function M.with_resize(new_win)
+    return setmetatable({ resize = true }, {
+        __call = function(_, buf, ...)
+            return new_win(buf, ...)
+        end,
+    })
+end
+
+---@param win integer
+---@param buf integer
+local function resize_window(win, buf)
+    if not api.nvim_win_is_valid(win) or not api.nvim_buf_is_valid(buf) then
+        return
+    end
+    local lines = api.nvim_buf_get_lines(buf, 0, -1, true)
+    local width = 0
+    local height = #lines
+    for _, line in ipairs(lines) do
+        width = math.max(width, vim.fn.strdisplaywidth(line))
+    end
+    width = math.min(width, math.floor(vim.o.columns * 0.9))
+    height = math.min(height, vim.o.lines)
+    api.nvim_win_set_config(win, { width = width, height = height })
+end
+---@param win integer
+---@param buf integer
+---@return dap.ui.Layer layer that resizes the window after each render
+local function resizing_layer(win, buf)
+    local layer = ui.layer(buf)
+    local original_render = layer.render
+    ---@diagnostic disable-next-line: inject-field
+    layer.render = function(...)
+        original_render(...)
+        if
+            api.nvim_win_is_valid(win)
+            and api.nvim_buf_is_valid(buf)
+            and api.nvim_win_get_config(win).relative ~= ''
+        then
+            resize_window(win, buf)
+        end
+    end
+
+    return layer
+end
+
+---@class dap.ui.WidgetSpec
+---@field refresh_listener string|string[] DAP event names that trigger a widget refresh
+---@field new_buf fun(view: table<string, any>): integer buffer factory for the widget
+---@field render fun(view: table<string, any>, ...: any) renders the widget into its layer
+---@field before_open? fun(view: table<string, any>) hook run before the widget window opens
+---@field after_open? fun(view: table<string, any>) hook run after the widget window opens
+
+---Create a scratch buffer for a widget, named `dap-<name>-<bufnr>`.
+---@param name string widget name used in the buffer name
+---@param with_yank_evalname? boolean install the TextYankPost → yank_evalname hook and tagfunc
+---@return integer bufnr
+local function named_widget_buf(name, with_yank_evalname)
+    local buf = new_buf()
+    if with_yank_evalname then
+        vim.bo[buf].tagfunc = "v:lua.require'dap'._tagfunc"
+        api.nvim_create_autocmd('TextYankPost', {
+            buffer = buf,
+            callback = function()
+                require('dap._cmds').yank_evalname()
+            end,
+        })
+    end
+    api.nvim_buf_set_name(buf, 'dap-' .. name .. '-' .. tostring(buf))
+    return buf
+end
+
+---@type dap.ui.WidgetSpec
+M.scopes = {
+    refresh_listener = 'scopes',
+    new_buf = function(view)
+        local dap = require('dap')
+        local function reset_tree()
+            view.tree = nil
+        end
+        dap.listeners.after['event_terminated'][view] = reset_tree
+        dap.listeners.after['event_exited'][view] = reset_tree
+        local buf = named_widget_buf('scopes', true)
+        api.nvim_buf_attach(buf, false, {
+            on_detach = function()
+                dap.listeners.after['event_terminated'][view] = nil
+                dap.listeners.after['event_exited'][view] = nil
+            end,
+        })
+        return buf
+    end,
+    render = function(view)
+        local session = require('dap').session()
+        local frame = session and session.current_frame or {}
+        local tree = view.tree
+        if not tree then
+            local spec = vim.deepcopy(require('dap.entity').scope.tree_spec)
+            spec.extra_context = { view = view }
+            tree = ui.new_tree(spec)
+            view.tree = tree
+        end
+        local layer = view.layer()
+        local scopes = frame.scopes or {}
+        local render
+        render = function(idx, scope, replace)
+            if not scope then
+                return
+            end
+            tree.render(layer, scope, function()
+                render(next(scopes, idx))
+            end, replace and 0 or nil, replace and -1 or nil)
+        end
+        local idx, scope = next(scopes)
+        render(idx, scope, true)
+    end,
+}
+---@type dap.ui.WidgetSpec
+M.threads = {
+    refresh_listener = 'event_thread',
+    new_buf = function()
+        return named_widget_buf('threads')
+    end,
+    render = function(view)
+        local layer = view.layer()
+        local session = require('dap').session()
+        if not session then
+            layer.render({
+                'No active session',
+            })
+            return
+        end
+        if session.dirty.threads then
+            session:update_threads(function()
+                M.threads.render(view)
+            end)
+            return
+        end
+        local tree = view.tree
+        if not tree then
+            local spec = vim.deepcopy(require('dap.entity').threads.tree_spec)
+            spec.extra_context = {
+                view = view,
+                refresh = view.refresh,
+            }
+            tree = ui.new_tree(spec)
+            view.tree = tree
+        end
+        local root = {
+            id = 0,
+            name = 'Threads',
+            threads = vim.tbl_values(session.threads),
+        }
+        tree.render(layer, root)
+    end,
+}
+
+---@type dap.ui.WidgetSpec
+M.frames = {
+    refresh_listener = 'scopes',
+    new_buf = function()
+        return named_widget_buf('frames')
+    end,
+    render = function(view)
+        local session = require('dap').session()
+        local layer = view.layer()
+        if not session then
+            layer.render({
+                'No active session',
+            })
+            return
+        end
+        if not session.stopped_thread_id then
+            layer.render({
+                'Not stopped at any breakpoint. No frames available',
+            })
+            return
+        end
+        local thread = session.threads[session.stopped_thread_id]
+        if not thread then
+            local msg = string.format(
+                "Stopped thread (%d) not found. Can't display frames",
+                session.stopped_thread_id
+            )
+            layer.render({ msg })
+            return
+        end
+
+        local frames = thread.frames
+        -- Generation token: rapid thread switches can leave a stale
+        -- stackTrace response racing a newer render; drop the stale one.
+        view.__frames_generation = (view.__frames_generation or 0) + 1
+        local generation = view.__frames_generation
+        require('dap.async').run(function()
+            if not frames then
+                local err, response = session:request('stackTrace', { threadId = thread.id })
+                ---@cast response dap.StackTraceResponse
+                if err or not response then
+                    if view.__frames_generation == generation then
+                        layer.render({ 'Stopped thread has no frames' })
+                    end
+                    return
+                end
+                frames = response.stackFrames
+            end
+            if view.__frames_generation ~= generation then
+                return
+            end
+            local context = {}
+            context.actions = {
+                {
+                    label = 'Jump to frame',
+                    fn = function(_, frame)
+                        if session then
+                            local close = vim.bo.bufhidden == 'wipe'
+                            session:_frame_set(frame)
+                            if close then
+                                view.close()
+                            end
+                        else
+                            utils.notify(
+                                'Cannot navigate to frame without active session',
+                                vim.log.levels.INFO
+                            )
+                        end
+                    end,
+                },
+            }
+            local render_frame = require('dap.entity').frames.render_item
+            layer.render(frames, render_frame, context)
+        end)
+    end,
+}
+
+---@type dap.ui.WidgetSpec
+M.sessions = {
+    refresh_listener = {
+        'event_initialized',
+        'event_terminated',
+        'disconnect',
+        'event_stopped',
+    },
+    new_buf = function()
+        return named_widget_buf('sessions')
+    end,
+    render = function(view)
+        local dap = require('dap')
+        local sessions = dap.sessions()
+        local layer = view.layer()
+        local lsessions = {}
+
+        local add
+        add = function(s)
+            table.insert(lsessions, s)
+            local children = {}
+            for _, child in pairs(s.children) do
+                children[#children + 1] = child
+            end
+            table.sort(children, function(a, b)
+                return a.id < b.id
+            end)
+            for _, child in ipairs(children) do
+                add(child)
+            end
+        end
+        local top_level = {}
+        for _, s in pairs(sessions) do
+            top_level[#top_level + 1] = s
+        end
+        table.sort(top_level, function(a, b)
+            return a.id < b.id
+        end)
+        for _, s in ipairs(top_level) do
+            add(s)
+        end
+        local context = {}
+        context.actions = {
+            {
+                label = 'Focus session',
+                fn = function(_, s)
+                    local close = vim.bo.bufhidden == 'wipe'
+                    if s then
+                        dap.set_session(s)
+                        view.refresh()
+                    end
+                    if close then
+                        view.close()
+                    end
+                end,
+            },
+        }
+        local focused = dap.session()
+        local render_session = function(s)
+            local text = s.id .. ': ' .. s.config.name
+            local parent = s.parent
+            local num_parents = 0
+            while parent ~= nil do
+                parent = parent.parent
+                num_parents = num_parents + 1
+            end
+            local prefix
+            if focused and s.id == focused.id then
+                prefix = '→ '
+            else
+                prefix = '  '
+            end
+            return prefix .. string.rep('  ', num_parents) .. text
+        end
+        layer.render({}, tostring, nil, 0, -1)
+        layer.render(lsessions, render_session, context)
+    end,
+}
+
+do
+    ---@param scopes dap.Scope[]
+    ---@param expression string
+    ---@return dap.Variable?
+    local function find_var(scopes, expression)
+        for _, s in ipairs(scopes) do
+            for _, var in ipairs(s.variables or {}) do
+                if var.name == expression then
+                    return var
+                end
+            end
+        end
+        return nil
+    end
+
+    ---@type dap.ui.WidgetSpec
+    M.expression = {
+        new_buf = function()
+            return named_widget_buf('expression', true)
+        end,
+        before_open = function(v)
+            v.__expression = vim.fn.expand('<cexpr>')
+        end,
+        render = function(view, expr)
+            local session = require('dap').session()
+            local layer = view.layer()
+            if not session then
+                layer.render({ 'No active session' })
+                return
+            end
+            local expression = expr or view.__expression
+            local context = session.capabilities.supportsEvaluateForHovers and 'hover' or 'repl'
+            local args = {
+                expression = expression,
+                context = context,
+            }
+            local frame = session.current_frame or {}
+            local scopes = frame.scopes or {}
+            session:evaluate(args, function(err, resp)
+                local spec = vim.deepcopy(require('dap.entity').variable.tree_spec)
+                spec.extra_context = { view = view }
+                if err then
+                    local variable = find_var(scopes, expression)
+                    if variable then
+                        local tree = ui.new_tree(spec)
+                        -- `layer` was captured and validated before the async
+                        -- evaluate call; re-resolving view.layer() here could
+                        -- assert in callback context if the buffer was wiped.
+                        tree.render(layer, variable)
+                    else
+                        local msg = "Error evaluating '" .. expression .. "':"
+                        layer.render({ msg, '', tostring(err) })
+                    end
+                elseif resp and resp.result then
+                    local attributes = (resp.presentationHint or {}).attributes or {}
+                    if resp.variablesReference > 0 or vim.tbl_contains(attributes, 'rawString') then
+                        local tree = ui.new_tree(spec)
+                        tree.render(layer, resp)
+                    else
+                        local lines = vim.split(resp.result, '\n', { plain = true })
+                        layer.render(lines)
+                    end
+                end
+            end)
+        end,
+    }
+end
+
+---@param widget dap.ui.WidgetSpec widget spec providing render/new_buf
+---@param nbuf fun(view: table<string, any>): integer buffer factory
+---@param nwin function window factory (or callable table)
+---@param hooks { [1]: function?, [2]: function? }[] before/after open hook pairs
+---@return table<string, any> opened widget view with layer() and refresh()
+local function build_view(widget, nbuf, nwin, hooks)
+    local before_open_results
+    local view = ui.new_view(nbuf, nwin, {
+
+        before_open = function(view)
+            before_open_results = {}
+            for _, hook in pairs(hooks) do
+                local result = hook[1] and hook[1](view) or vim.NIL
+                table.insert(before_open_results, result)
+            end
+        end,
+
+        after_open = function(view, _, ...)
+            for idx, hook in pairs(hooks) do
+                if hook[2] then
+                    hook[2](view, before_open_results[idx])
+                end
+            end
+            before_open_results = {}
+            return widget.render(view, ...)
+        end,
+    })
+
+    view.layer = function()
+        local buf = assert(view.buf, 'DAP view buffer is not initialized')
+
+        if type(nwin) == 'table' and nwin.resize then
+            local win = assert(view.win, 'DAP view window is not initialized')
+            return resizing_layer(win, buf)
+        end
+
+        return ui.layer(buf)
+    end
+
+    view.refresh = function()
+        local layer = view.layer()
+        layer.render({}, tostring, nil, 0, -1)
+        widget.render(view)
+    end
+    return view
+end
+
+function M.builder(widget)
+    assert(widget, 'widget is required')
+    local nwin
+    local nbuf = widget.new_buf
+    local hooks = { { widget.before_open, widget.after_open } }
+    local builder = {}
+
+    function builder.add_hooks(before_open, after_open)
+        table.insert(hooks, { before_open, after_open })
+        return builder
+    end
+
+    function builder.keep_focus()
+        builder.add_hooks(function()
+            return api.nvim_get_current_win()
+        end, function(_, win)
+            api.nvim_set_current_win(win)
+        end)
+        return builder
+    end
+
+    function builder.new_buf(val)
+        assert(val and type(val) == 'function', '`new_buf` must be a function')
+        nbuf = val
+        return builder
+    end
+
+    function builder.new_win(val)
+        assert(val, '`new_win` must be a callable')
+        nwin = val
+        return builder
+    end
+
+    function builder.build()
+        assert(nwin, '`new_win` function must be set')
+        return build_view(widget, nbuf, nwin, hooks)
+    end
+    return builder
+end
+
+---@param expr nil|string|fun():string
+---@return string
+local function eval_expression(expr)
+    local mode = api.nvim_get_mode()
+    if mode.mode == 'v' then
+        -- [bufnum, lnum, col, off]; 1-indexed
+        local start = vim.fn.getpos('v')
+        local end_ = vim.fn.getpos('.')
+
+        local start_row = start[2]
+        local start_col = start[3]
+
+        local end_row = end_[2]
+        local end_col = end_[3]
+
+        if start_row == end_row and end_col < start_col then
+            end_col, start_col = start_col, end_col
+        elseif end_row < start_row then
+            start_row, end_row = end_row, start_row
+            start_col, end_col = end_col, start_col
+        end
+
+        api.nvim_feedkeys(api.nvim_replace_termcodes('<ESC>', true, false, true), 'n', false)
+
+        -- buf_get_text is 0-indexed; end-col is exclusive
+        local lines =
+            api.nvim_buf_get_text(0, start_row - 1, start_col - 1, end_row - 1, end_col, {})
+        return table.concat(lines, '\n')
+    end
+    expr = expr or '<cexpr>'
+    if type(expr) == 'function' then
+        return expr()
+    else
+        return vim.fn.expand(expr)
+    end
+end
+
+---@param widget dap.ui.WidgetSpec widget spec to show in the float
+---@param winopts table<string, any>? window options passed to the float window
+---@return table<string, any> built (not yet opened) cursor-anchored float view
+local function cursor_anchored_view(widget, winopts)
+    local new_win = M.with_resize(with_winopts(M.new_cursor_anchored_float_win, winopts))
+    return M.builder(widget).new_win(new_win).build()
+end
+
+---@param expr nil|string|fun():string
+---@param winopts table<string, any>?
+---@return table<string, any> opened hover widget view
+function M.hover(expr, winopts)
+    local value = eval_expression(expr)
+    local view = cursor_anchored_view(M.expression, winopts)
+    local buf = view.open(value)
+    api.nvim_buf_set_name(buf, 'dap-hover-' .. tostring(buf) .. ': ' .. value)
+    api.nvim_win_set_cursor(view.win, { 1, 0 })
+    return view
+end
+
+function M.cursor_float(widget, winopts)
+    local view = cursor_anchored_view(widget, winopts)
+    view.open()
+    return view
+end
+
+function M.centered_float(widget, winopts)
+    local view = M.builder(widget).new_win(with_winopts(M.new_centered_float_win, winopts)).build()
+    view.open()
+    return view
+end
+
+--- View the value of the expression under the cursor in a preview window
+---
+---@param expr nil|string|fun():string
+---@param opts? {listener?: string[]}
+---@return table<string, any> opened preview widget view
+function M.preview(expr, opts)
+    opts = opts or {}
+    local value = eval_expression(expr)
+    -- The preview buffer name carries raw expression text (possibly a
+    -- multi-line visual selection); escape it so `:pedit` cannot break out
+    -- of the Ex command on `|`, quotes, or newlines.
+    local preview_name = vim.fn.fnameescape('dap-preview: ' .. value)
+
+    local function new_preview_buf()
+        vim.cmd('pedit ' .. preview_name)
+        for _, win in pairs(api.nvim_list_wins()) do
+            if vim.wo[win].previewwindow then
+                local buf = api.nvim_win_get_buf(win)
+                set_default_bufopts(buf)
+                vim.bo[buf].bufhidden = 'delete'
+                return buf
+            end
+        end
+    end
+
+    local function new_preview_win()
+        -- Avoid pedit call if window is already open
+        -- Otherwise on_detach is triggered
+        for _, win in ipairs(api.nvim_list_wins()) do
+            if vim.wo[win].previewwindow then
+                return win
+            end
+        end
+        vim.cmd('pedit ' .. preview_name)
+        for _, win in ipairs(api.nvim_list_wins()) do
+            if vim.wo[win].previewwindow then
+                return win
+            end
+        end
+    end
+
+    if opts.listener and next(opts.listener) then
+        new_preview_buf = M.with_refresh(new_preview_buf, opts.listener)
+    end
+    local view = M.builder(M.expression).new_buf(new_preview_buf).new_win(new_preview_win).build()
+    view.open(value)
+    view.__expression = value
+    return view
+end
+
+--- Decorate a `new_buf` function so that it will register a
+-- `dap.listeners.after[listener]` which will trigger a `view.refresh` call.
+--
+-- Use this if you want a widget to live-update.
+---@param new_buf_ fun(view: table<string, any>): integer buffer factory to decorate
+---@param listener string|string[]
+---@return fun(view: table<string, any>): integer buffer factory registering refresh listeners
+function M.with_refresh(new_buf_, listener)
+    local listeners
+    if type(listener) == 'table' then
+        listeners = listener
+    else
+        listeners = { listener }
+    end
+    ---@param view table<string, any> widget view to register refresh listeners on
+    ---@return integer bufnr from the wrapped buffer factory
+    return function(view)
+        local dap = require('dap')
+        for _, l in pairs(listeners) do
+            dap.listeners.after[l][view] = view.refresh
+        end
+        local buf = new_buf_(view)
+        api.nvim_buf_attach(buf, false, {
+            on_detach = function()
+                for _, l in pairs(listeners) do
+                    dap.listeners.after[l][view] = nil
+                end
+            end,
+        })
+        return buf
+    end
+end
+
+--- Open the given widget in a sidebar
+--@param winopts with options that configure the window
+--@param wincmd command used to create the sidebar
+function M.sidebar(widget, winopts, wincmd)
+    return M.builder(widget)
+        .keep_focus()
+        .new_win(mk_sidebar_win_func(winopts, wincmd))
+        .new_buf(M.with_refresh(widget.new_buf, widget.refresh_listener or 'event_stopped'))
+        .build()
+end
+
+---@param session dap.Session
+---@param expr string
+---@param max_level integer
+---@return string[] rendered variable lines
+local function get_var_lines(session, expr, max_level)
+    local req_args = {
+        expression = expr,
+        context = 'repl',
+        frameId = (session.current_frame or {}).id,
+    }
+    local eval_err, eval_result = session:request('evaluate', req_args)
+
+    if eval_err then
+        error(vim.inspect(eval_err), 0)
+    end
+    assert(eval_result, 'DAP evaluate request returned no response')
+    local lines = {}
+    local value = eval_result.result:gsub('\n', '\\n')
+    table.insert(lines, value)
+
+    local function add_children(ref, level)
+        require('dap.progress').report('Fetching ' .. tostring(ref))
+
+        ---@type dap.VariablesArguments
+        local vargs = {
+            variablesReference = ref,
+        }
+        local err, result = session:request('variables', vargs)
+
+        if err then
+            error(vim.inspect(err), 0)
+        end
+        assert(result, 'DAP variables request returned no response')
+        for _, variable in ipairs(result.variables) do
+            local val = variable.value:gsub('\n', '\\n')
+            local indent = level * 2
+            local line = string.rep(' ', indent) .. variable.name .. ': ' .. val
+            lines[#lines + 1] = line
+            if level < max_level and variable.variablesReference > 0 then
+                add_children(variable.variablesReference, level + 1)
+            end
+        end
+    end
+
+    if eval_result.variablesReference > 0 then
+        add_children(eval_result.variablesReference, 0)
+    end
+
+    return lines
+end
+
+--- Generate a diff between two expressions
+---
+--- Opens a new tab with two windows and buffers in diff mode.
+--- The diff is based on the lines of the variable tree's, expanded up to `max_level`
+---
+---@param expr1 string
+---@param expr2 string
+---@param max_level? integer default: 1
+function M.diff_var(expr1, expr2, max_level)
+    local dap = require('dap')
+    local session = dap.session()
+    if not session then
+        utils.notify('No active session', vim.log.levels.INFO)
+        return
+    end
+    max_level = max_level or 1
+    require('dap.async').run(function()
+        local lines1 = get_var_lines(session, expr1, max_level)
+        local lines2 = get_var_lines(session, expr2, max_level)
+        require('dap.progress').report('Diff operation done')
+        require('dap.progress').report('Running: ' .. session.config.name)
+        vim.cmd.tabnew()
+        local buf1 = api.nvim_get_current_buf()
+        api.nvim_buf_set_lines(buf1, 0, -1, true, lines1)
+        vim.bo[buf1].modified = false
+        vim.bo[buf1].bufhidden = 'wipe'
+        vim.cmd.diffthis()
+
+        vim.cmd.vnew()
+        local buf2 = api.nvim_get_current_buf()
+        api.nvim_buf_set_lines(buf2, 0, -1, true, lines2)
+        vim.bo[buf2].modified = false
+        vim.bo[buf2].bufhidden = 'wipe'
+        vim.cmd.diffthis()
+    end)
+end
+
+return M

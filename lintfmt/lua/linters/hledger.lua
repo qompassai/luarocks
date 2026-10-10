@@ -1,0 +1,24 @@
+-- ~/.config/nvim/lua/linters/hledger.lua
+-- Native hledger check adapter; uses utils/hledger.lua for explicit policy.
+-- SPDX-License-Identifier: Apache-2.0
+local ok, journal = pcall(require, 'utils.hledger')
+if not ok then
+    ---@type LinterUnavailable
+    return { unavailable = 'utils.hledger' }
+end
+---@type Linter
+return {
+    append_fname = false,
+    args = journal.arguments,
+    automatic = journal.config.automatic_lint,
+    cmd = journal.config.env_executable,
+    cwd = journal.cwd,
+    env = {}, -- env -i in argv defines the complete child environment.
+    exit_codes = { 0, 1 }, -- hledger check returns 1 for data errors.
+    ignore_exitcode = false,
+    parser = journal.parse,
+    root_markers = { '.git' },
+    stdin = true,
+    stream = 'both',
+    timeout = journal.config.timeout_ms,
+}

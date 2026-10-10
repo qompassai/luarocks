@@ -1,11 +1,17 @@
-# Changelog — qompassai/lua-template
+# Changelog — qompassai/luarocks
 
-## 2026-09-28 — Initial template
+## 2026-10-09 — Initial release: ten diver-* rocks (0.1.0-1)
 
-- Created as a GitHub **template repository** (`is_template=true`, public) for Lua projects.
-- Standard layout: `src/`, `tests/`, `docs/`, `examples/`, `.github/workflows/ci.yml` sanity job.
-- Starter: hello-world in Lua (`src/00_hello.lua` + runnable copy in `examples/`).
-- `README.md` ships with `{{PROJECT}}` / `{{DESCRIPTION}}` / `{{SLUG}}` placeholders and a "How to use this template" section (deleted on instantiation).
-- License: Apache 2.0 only (`LICENSE`, `Copyright 2026 Qompass AI`); `CITATION.cff` declares SPDX `Apache-2.0`.
-- Neovim-first: `.nvim.lua` project-local config (defines commands only, never auto-executes), `docs/NEOVIM.md` diver wiring guide, `.editorconfig`.
-- Tiger style: explicit contracts, one idea per file, ELI5 comments where the subject is surprising.
+- Created from the `qompassai/lua-template` GitHub template (public, Apache-2.0).
+- Packaged 845 of the diver Neovim config's 945 `lua/` modules as ten
+  standalone LuaRocks, grouped logically: diver-utils, diver-config,
+  diver-dap, diver-games, diver-lintfmt, diver-research, diver-security,
+  diver-comms, diver-ai, diver-dev. Module names preserved exactly; files
+  byte-identical to the config sources except two flagged deviations
+  (see README).
+- Every rock passed a standalone gate: installed into a fresh scratch
+  LuaRocks tree with only its declared dependencies, every module required
+  in bare Neovim (`-u NONE`), included tests run.
+- Not rocked: LuaCATS type stubs, personal config wiring (lang settings,
+  mappings, nav), the `plugin/` shim, and two standalone CLI scripts —
+  rationale in the README.

@@ -1,0 +1,1894 @@
+--- Native linter runner — the foreman that runs all your linters.
+---
+--- produce results.
+---@module 'linters'
+-- /qompassai/Diver/lua/linters/init.lua
+-- Qompass AI Diver Native Linter Runner
+-- Copyright (C) 2025 Qompass AI, All rights reserved
+-- SPDX-License-Identifier: Apache-2.0
+------------------------------------------------
+---@source https://github.com/mfussenegger/nvim-lint/tree/master/lua/lint/linters
+---@source https://megalinter.io/8/supported-linters/
+local api = vim.api
+local diagnostic = vim.diagnostic
+local fn = vim.fn
+
+local M = {}
+local module_options = ...
+if type(module_options) ~= 'table' then
+    module_options = {}
+end
+M.completion_api_version = 1
+local OUTPUT_BYTES_MAX = 65536
+local SIGTERM = 15
+local TIMEOUT_EXIT_CODE = 124
+
+---@class LintOptions
+---@field debounce_ms integer
+---@field enabled boolean
+---@field events string[]
+---@field max_file_size integer
+---@field notify_missing boolean
+
+---@class LintSetupOptions
+---@field debounce_ms? integer
+---@field enabled? boolean
+---@field events? string[]
+---@field max_file_size? integer
+---@field notify_missing? boolean
+
+---@type LintOptions
+M.options = {
+    debounce_ms = 250,
+    enabled = true,
+    events = {
+        'BufReadPost',
+        'BufWritePost',
+        'InsertLeave',
+    },
+    max_file_size = 1024 * 1024,
+    notify_missing = false,
+}
+M.module_sources = { ---@type table<string, string>
+    actionlint = 'linters.actionlint',
+    alex = 'linters.alex',
+    ameba = 'linters.ameba',
+    android_lint = 'linters.android_lint',
+    ansible_lint = 'linters.ansible_lint',
+    apkbuild_lint = 'linters.apkbuild-lint',
+    bandit = 'linters.bandit',
+    bash = 'linters.bash',
+    bashate = 'linters.bashate',
+    bashlint = 'linters.bashlint',
+    betterleaks = 'linters.betterleaks',
+    bibclean = 'linters.bibclean',
+    biome = 'linters.biome',
+    bootlint = 'linters.bootlint',
+    buf_lint = 'linters.buf_lint',
+    buildifier = 'linters.buildifier',
+    cfn_lint = 'linters.cfn-lint',
+    checkbashisms = 'linters.checkbashisms',
+    checkcode = 'linters.checkcode',
+    checkmake = 'linters.checkmake',
+    checkpatch = 'linters.checkpatch',
+    checkstyle = 'linters.checkstyle',
+    chktex = 'linters.chktex',
+    clangtidy = 'linters.clangtidy',
+    clazy = 'linters.clazy',
+    clippy = 'linters.clippy',
+    clj_kondo = 'linters.clj-kondo',
+    cmake_lint = 'linters.cmake-lint',
+    codespell = 'linters.codespell',
+    commitlint = 'linters.commitlint',
+    cookstyle = 'linters.cookstyle',
+    cppcheck = 'linters.cppcheck',
+    credo = 'linters.credo',
+    csharpier = 'linters.csharpier',
+    cspell = 'linters.cspell',
+    csslint = 'linters.csslint',
+    cue = 'linters.cue',
+    cypher_lint = 'linters.cypher-lint',
+    cython_lint = 'linters.cython-lint',
+    dash = 'linters.dash',
+    deadnix = 'linters.deadnix',
+    deno = 'linters.deno',
+    desktopval = 'linters.desktopval',
+    detect_secrets = 'linters.detect-secrets',
+    detekt = 'linters.detekt',
+    dialyzer = 'linters.dialyzer',
+    djlint = 'linters.djlint',
+    dmypy = 'linters.dmypy',
+    docker_compose = 'linters.docker_compose',
+    dotenv_linter = 'linters.dotenv-linter',
+    dxc = 'linters.dxc',
+    editorconfig_checker = 'linters.editorconfig-checker',
+    erb_lint = 'linters.erb_lint',
+    eslint = 'linters.eslint',
+    eslint_d = 'linters.eslint_d',
+    eugene = 'linters.eugene',
+    fieldalignment = 'linters.fieldalignment',
+    fish = 'linters.fish',
+    flake8 = 'linters.flake8',
+    flawfinder = 'linters.flawfinder',
+    fortitude = 'linters.fortitude',
+    fsharplint = 'linters.fsharplint',
+    gawk = 'linters.gawk',
+    gdlint = 'linters.gdlint',
+    gdscript_linter = 'linters.gdscript-linter',
+    ghdl = 'linters.ghdl',
+    glinter = 'linters.glinter',
+    glslc = 'linters.glslc',
+    golangcilint = 'linters.golangcilint',
+    hadolint = 'linters.hadolint',
+    herb = 'linters.herb',
+    hledger = 'linters.hledger',
+    hlint = 'linters.hlint',
+    html_tidy = 'linters.html-tidy',
+    html_validate = 'linters.html_validate',
+    htmlhint = 'linters.htmlhint',
+    janet = 'linters.janet',
+    joker = 'linters.joker',
+    jq = 'linters.jq',
+    json5 = 'linters.json5',
+    json_tool = 'linters.json_tool',
+    kics = 'linters.kics',
+    ksh = 'linters.ksh',
+    ktlint = 'linters.ktlint',
+    lacheck = 'linters.lacheck',
+    lightning_flow_scanner = 'linters.lightning-flow-scanner',
+    lint_openapi = 'linters.lint-openapi',
+    llvm_mc = 'linters.llvm-mc',
+    luac = 'linters.luac',
+    luacheck = 'linters.luacheck',
+    mado = 'linters.mado',
+    mago_analyze = 'linters.mago_analyze',
+    markdown_table_formatter = 'linters.markdown-table-formatter',
+    markdownlint = 'linters.markdownlint',
+    markdownlint_cli2 = 'linters.markdownlint-cli2',
+    markuplint = 'linters.markuplint',
+    markuplint_cli2 = 'linters.markuplint-cli2',
+    mbake = 'linters.mbake',
+    mdl = 'linters.mdl',
+    mh_lint = 'linters.mh_lint',
+    mypy = 'linters.mypy',
+    naga = 'linters.naga',
+    npm_groovy_lint = 'linters.npm_groovy_lint',
+    nvcc = 'linters.nvcc',
+    oelint_adv = 'linters.oelint-adv',
+    opa_checks = 'linters.opa_checks',
+    oxlint = 'linters.oxlint',
+    panache = 'linters.panache',
+    perlcritic = 'linters.perlcritic',
+    php = 'linters.php',
+    phpcs = 'linters.phpcs',
+    phpinsights = 'linters.phpinsights',
+    phpmd = 'linters.phpmd',
+    phpstan = 'linters.phpstan',
+    pmd = 'linters.pmd',
+    pony_lint = 'linters.pony-lint',
+    prisma_lint = 'linters.prisma-lint',
+    proselint = 'linters.proselint',
+    protolint = 'linters.protolint',
+    psalm = 'linters.psalm',
+    psscriptanalyzer = 'linters.psscryptanalyzer',
+    puppet_lint = 'linters.puppet-lint',
+    pycodestyle = 'linters.pycodestyle',
+    pylint = 'linters.pylint',
+    pyrefly = 'linters.pyrefly',
+    quick_lint_js = 'linters.quick-lint-js',
+    redocly = 'linters.redocly',
+    regal = 'linters.regal',
+    remark_lint = 'linters.remark-lint',
+    revive = 'linters.revive',
+    rpmlint = 'linters.rpmlint',
+    rst_lint = 'linters.rst-lint',
+    rstcheck = 'linters.rstcheck',
+    rubocop = 'linters.rubocop',
+    ruby = 'linters.ruby',
+    ruff = 'linters.ruff',
+    rumdl = 'linters.rumdl',
+    scalafix = 'linters.scalafix',
+    scalastyle = 'linters.scalastyle',
+    scarb = 'linters.scarb',
+    secfixes_check = 'linters.secfixes-check',
+    secretlint = 'linters.secretlint',
+    selene = 'linters.selene',
+    shellcheck = 'linters.shellcheck',
+    slang = 'linters.slang',
+    snakefmt = 'linters.snakefmt',
+    snakemake = 'linters.snakemake',
+    solhint = 'linters.solhint',
+    spectral = 'linters.spectral',
+    sphinx_lint = 'linters.sphinx-lint',
+    sqlfluff = 'linters.sqlfluff',
+    sqruff = 'linters.sqruff',
+    squawk = 'linters.squawk',
+    staticcheck = 'linters.staticcheck',
+    statix = 'linters.statix',
+    stylelint = 'linters.stylelint',
+    svlint = 'linters.svlint',
+    systemd_analyze = 'linters.systemd-analyze',
+    systemdlint = 'linters.systemdlint',
+    textlint = 'linters.textlint',
+    tflint = 'linters.tflint',
+    tombi = 'linters.tombi',
+    trivy = 'linters.trivy',
+    twig_cs = 'linters.twig_cs',
+    typos = 'linters.typos',
+    unmake = 'linters.unmake',
+    v8r = 'linters.v8r',
+    vacuum = 'linters.vacuum',
+    vale = 'linters.vale',
+    vint = 'linters.vint',
+    vsg = 'linters.vsg',
+    vulture = 'linters.vulture',
+    write_good = 'linters.write_good',
+    yamllint = 'linters.yamllint',
+    yara = 'linters.yara',
+    yq = 'linters.yq',
+    zizmor = 'linters.zizmor',
+    zlint = 'linters.zlint',
+    zsh = 'linters.zsh',
+}
+M.definitions = {} ---@type table<string, Linter>
+M.load_errors = {} ---@type table<string, string>
+---Adapters present on disk that are intentionally NOT registered in
+---M.module_sources, with the reason why. M.validate() reports any other
+---on-disk adapter missing from module_sources as an orphan, so the runner
+---can never silently lose the ability to load a file.
+---@type table<string, string>
+M.unregistered_adapters = {
+    ['linters._salesforce-code-analyzer'] = 'factory module (M.new); instantiated by linters.lightning-flow-scanner',
+    ['linters.code_analyzer'] = 'factory module (M.new), not a Linter definition; nothing instantiates it',
+    ['linters.latex'] = 'disabled SCIP indexer definition, not a Linter',
+}
+---@param name string
+---@param module_name string
+local function load_linter(name, module_name)
+    local ok, result = pcall(require, module_name)
+    if not ok then
+        M.load_errors[name] = ('%s failed to load: %s'):format(module_name, tostring(result))
+        return
+    end
+    if type(result) ~= 'table' then
+        M.load_errors[name] = ('%s returned %s; its file must end with `return { ... }`'):format(
+            module_name,
+            type(result)
+        )
+        return
+    end
+    ---@cast result Linter
+    M.definitions[name] = result
+end
+
+if not module_options.lazy then
+    for name, module_name in pairs(M.module_sources) do
+        load_linter(name, module_name)
+    end
+end
+
+--- Returns the registered definition, lazily loading its module when embedding deferred it.
+---@param name string
+---@return Linter?
+function M.get_definition(name)
+    vim.validate({
+        name = { name, 'string' },
+    })
+    if M.definitions[name] == nil and M.module_sources[name] ~= nil then
+        load_linter(name, M.module_sources[name])
+    end
+    return M.definitions[name]
+end
+
+---@type table<string, string[]>
+M.linters_by_ft = {
+    ansible = {
+        'ansible_lint',
+    },
+    apkbuild = {
+        'apkbuild_lint',
+        'secfixes_check',
+    },
+    asm = {
+        'llvm_mc',
+    },
+    awk = {
+        'gawk',
+    },
+    bash = {
+        'bash',
+        'shellcheck',
+    },
+    bazel = {
+        'buildifier',
+    },
+    bib = {
+        'bibclean',
+    },
+    bibtex = {
+        'bibclean',
+    },
+    bitbake = {
+        'oelint_adv',
+    },
+    c = {
+        'clangtidy',
+        'cppcheck',
+        'flawfinder',
+    },
+    cairo = {
+        'scarb',
+    },
+    chef = {
+        'cookstyle',
+    },
+    clojure = {
+        'clj_kondo',
+    },
+    cmake = {
+        'cmake_lint',
+    },
+    cpp = {
+        'clangtidy',
+        'clazy',
+        'cppcheck',
+        'flawfinder',
+    },
+    crystal = {
+        'ameba',
+    },
+    cs = {
+        'csharpier',
+    },
+    css = {
+        'stylelint',
+    },
+    cuda = {
+        'nvcc',
+    },
+    cue = {
+        'cue',
+    },
+    cypher = {
+        'cypher_lint',
+    },
+    cython = {
+        'cython_lint',
+    },
+    desktop = {
+        'desktopval',
+    },
+    dockerfile = {
+        'hadolint',
+        'trivy',
+    },
+    dotenv = {
+        'betterleaks',
+        'detect_secrets',
+        'dotenv_linter',
+        'secretlint',
+    },
+    elixir = {
+        'credo',
+    },
+    erlang = {
+        'dialyzer',
+    },
+    eruby = {
+        'erb_lint',
+        'herb',
+    },
+    fish = {
+        'fish',
+    },
+    fortran = {
+        'fortitude',
+    },
+    fsharp = {
+        'fsharplint',
+    },
+    gdscript = {
+        'gdlint',
+        'gdscript_linter',
+    },
+    gitcommit = {
+        'commitlint',
+    },
+    gleam = {
+        'glinter',
+    },
+    glsl = {
+        'glslc',
+    },
+    go = {
+        'fieldalignment',
+        'golangcilint',
+        'staticcheck',
+    },
+    groovy = {
+        'npm_groovy_lint',
+    },
+    haskell = {
+        'hlint',
+    },
+    hlsl = {
+        'dxc',
+    },
+    html = {
+        'html_tidy',
+        'html_validate',
+        'markuplint',
+        'markuplint_cli2',
+    },
+    htmlangular = {
+        'djlint',
+    },
+    htmldjango = {
+        'djlint',
+    },
+    janet = {
+        'janet',
+    },
+    java = {
+        'android_lint',
+    },
+    javascript = {
+        'biome',
+        'deno',
+        'eslint',
+        'oxlint',
+        'quick_lint_js',
+    },
+    javascriptreact = {
+        'biome',
+        'deno',
+        'eslint',
+        'oxlint',
+        'quick_lint_js',
+    },
+    jinja = {
+        'djlint',
+    },
+    jinja2 = {
+        'djlint',
+    },
+    json = {
+        'biome',
+        'jq',
+        'json_tool',
+        'spectral',
+        'v8r',
+    },
+    json5 = {
+        'json5',
+    },
+    jsx = {
+        'biome',
+        'deno',
+        'eslint',
+        'oxlint',
+        'quick_lint_js',
+    },
+    kotlin = {
+        'android_lint',
+        'detekt',
+        'ktlint',
+    },
+    latex = {
+        'chktex',
+    },
+    lua = {
+        'luacheck',
+        'selene',
+    },
+    mail = {
+        'proselint',
+    },
+    make = {
+        'checkmake',
+        'mbake',
+        'unmake',
+    },
+    markdown = {
+        'alex',
+        'cspell',
+        'markdown_table_formatter',
+        'markdownlint_cli2',
+        'panache',
+        -- 'vale',
+        'write_good',
+        --	'rumdl',
+    },
+    ['markdown.mdx'] = {
+        'markdownlint_cli2',
+        'rumdl',
+    },
+    matlab = {
+        'checkcode',
+        'mh_lint',
+    },
+    nix = {
+        'deadnix',
+        'statix',
+    },
+    openapi = {
+        'lint_openapi',
+        'redocly',
+        'spectral',
+        'vacuum',
+    },
+    perl = {
+        'perlcritic',
+    },
+    php = {
+        'mago_analyze',
+        'php',
+        'phpcs',
+        'phpinsights',
+        'phpmd',
+        'phpstan',
+        'psalm',
+    },
+    plaintex = {
+        'chktex',
+    },
+    pony = {
+        'pony_lint',
+    },
+    powershell = {
+        'psscriptanalyzer',
+    },
+    prisma = {
+        'prisma_lint',
+    },
+    proto = {
+        'buf_lint',
+        'protolint',
+    },
+    puppet = {
+        'puppet_lint',
+    },
+    python = {
+        'bandit',
+        'dmypy',
+        'flake8',
+        'mypy',
+        'pycodestyle',
+        'pylint',
+        --		'pyrefly',
+        'ruff',
+        'vulture',
+    },
+    quarto = {
+        'markdownlint_cli2',
+        'panache',
+        'rumdl',
+    },
+    rego = {
+        'opa_checks',
+        'regal',
+    },
+    rst = {
+        'rst_lint',
+        'rstcheck',
+        'sphinx_lint',
+    },
+    ruby = {
+        'rubocop',
+        'ruby',
+    },
+    rust = {
+        'clippy',
+    },
+    sass = {
+        'stylelint',
+    },
+    scala = {
+        'scalafix',
+        'scalastyle',
+    },
+    scss = {
+        'stylelint',
+    },
+    sh = {
+        'checkbashisms',
+        'dash',
+        'ksh',
+        'shellcheck',
+    },
+    snakemake = {
+        'snakefmt',
+        'snakemake',
+    },
+    solidity = {
+        'solhint',
+    },
+    spec = {
+        'rpmlint',
+    },
+    sql = {
+        'eugene',
+        'sqlfluff',
+        'sqruff',
+        'squawk',
+    },
+    swagger = {
+        'lint_openapi',
+        'redocly',
+        'spectral',
+        'vacuum',
+    },
+    systemd = {
+        'systemd_analyze',
+        'systemdlint',
+    },
+    systemverilog = {
+        'slang',
+        'svlint',
+    },
+    terraform = {
+        'kics',
+        'tflint',
+    },
+    ['terraform-vars'] = {
+        'tflint',
+    },
+    tex = {
+        'chktex',
+    },
+    text = {
+        'alex',
+        'codespell',
+        'cspell',
+        'editorconfig_checker',
+        'typos',
+        'vale',
+        'write_good',
+    },
+    toml = {
+        'tombi',
+    },
+    tsx = {
+        'biome',
+        'deno',
+        'eslint',
+        'oxlint',
+        'quick_lint_js',
+    },
+    twig = {
+        'twig_cs',
+    },
+    typescript = {
+        'biome',
+        'deno',
+        'eslint',
+        'oxlint',
+        'quick_lint_js',
+    },
+    typescriptreact = {
+        'biome',
+        'deno',
+        'eslint',
+        'oxlint',
+        'quick_lint_js',
+    },
+    vhdl = {
+        'ghdl',
+        'vsg',
+    },
+    vim = {
+        'vint',
+    },
+    vue = {
+        'eslint',
+        'eslint_d',
+    },
+    wgsl = {
+        'naga',
+    },
+    yaml = {
+        'cfn_lint',
+        'spectral',
+        'v8r',
+        'yamllint',
+        'yq',
+    },
+    ['yaml.ansible'] = {
+        'ansible_lint',
+    },
+    ['yaml.docker-compose'] = {
+        'docker_compose',
+    },
+    ['yaml.ghaction'] = {
+        'actionlint',
+        'zizmor',
+    },
+    ['yaml.github'] = {
+        'actionlint',
+        'zizmor',
+    },
+    ['yaml.openapi'] = {
+        'lint_openapi',
+        'redocly',
+        'spectral',
+        'vacuum',
+    },
+    yara = {
+        'yara',
+    },
+    yml = {
+        'cfn_lint',
+        'yamllint',
+        'yq',
+    },
+    zig = {
+        'zlint',
+    },
+    zine = {
+        'zlint',
+    },
+    zon = {
+        'zlint',
+    },
+    zsh = {
+        'zsh',
+    },
+}
+if not module_options.no_updates then
+    require('linters.update').setup(M.linters_by_ft)
+end
+---@type table<string, boolean>
+M.manual_linters = {
+    checkpatch = true,
+    clippy = true,
+    golangcilint = true,
+    pylint = true,
+    pyrefly = true,
+    scalastyle = true,
+    scarb = true,
+    secretlint = true,
+    tflint = true,
+    vulture = true,
+    zizmor = true,
+}
+
+local default_exit_codes = {
+    [0] = true,
+    [1] = true,
+}
+
+local default_root_markers = {
+    '.git',
+    '.hg',
+    '.svn',
+}
+local severity_by_letter = {
+    E = diagnostic.severity.ERROR,
+    I = diagnostic.severity.INFO,
+    N = diagnostic.severity.HINT,
+    S = diagnostic.severity.HINT,
+    W = diagnostic.severity.WARN,
+}
+---@type table<string, integer>
+local generations = {}
+---@type table<string, vim.SystemObj>
+local jobs = {}
+---@type table<string, boolean>
+local missing_reported = {}
+local namespaces = {} ---@type table<string, integer>
+---@type table<integer, uv.uv_timer_t>
+local timers = {}
+---@param definition Linter
+---@param code integer
+---@return boolean
+local function accepts_exit_code(definition, code)
+    if definition.ignore_exitcode then
+        return true
+    end
+    local configured = definition.exit_codes or default_exit_codes
+    if configured[code] == true then
+        return true
+    end
+    for _, accepted in ipairs(configured) do
+        if accepted == code then
+            return true
+        end
+    end
+    return false
+end
+
+---@param bufnr integer
+---@return string
+local function buffer_input(bufnr)
+    local input = table.concat(api.nvim_buf_get_lines(bufnr, 0, -1, false), '\n')
+    return vim.bo[bufnr].endofline and (input .. '\n') or input
+end
+
+---@param bufnr integer
+---@return boolean
+local function buffer_is_eligible(bufnr)
+    if not api.nvim_buf_is_valid(bufnr) or not api.nvim_buf_is_loaded(bufnr) then
+        return false
+    end
+    if vim.bo[bufnr].buftype ~= '' or vim.bo[bufnr].filetype == '' then
+        return false
+    end
+    local filename = api.nvim_buf_get_name(bufnr)
+    if filename == '' then
+        return false
+    end
+    local maximum = M.options.max_file_size
+    if maximum >= 0 then
+        local size = fn.getfsize(filename)
+        if size > maximum then
+            return false
+        end
+    end
+    return not vim.b[bufnr].lint_disabled
+end
+
+---@param executable_name string
+---@param definition Linter
+---@param context LintContext
+---@return string[]
+local function command_for(executable_name, definition, context)
+    local command = { executable_name }
+    local configured_args = definition.args
+    if type(configured_args) == 'function' then
+        vim.list_extend(command, configured_args(context))
+    elseif type(configured_args) == 'table' then
+        vim.list_extend(command, configured_args)
+    end
+    if definition.append_fname then
+        command[#command + 1] = context.filename
+    end
+    for index, argument in ipairs(command) do
+        if type(argument) ~= 'string' then
+            error(('command argument %d has type %s instead of string'):format(index, type(argument)), 0)
+        end
+    end
+    return command
+end
+
+---@param bufnr integer
+---@return string[]
+local function configured_linters(bufnr)
+    local configured = M.linters_by_ft[vim.bo[bufnr].filetype]
+    return type(configured) == 'table' and configured or {}
+end
+
+---@param candidates string|string[]
+---@return string?
+local function executable(candidates)
+    if type(candidates) == 'string' then
+        return fn.executable(candidates) == 1 and candidates or nil
+    end
+    if type(candidates) ~= 'table' then
+        return nil
+    end
+    for _, candidate in ipairs(candidates) do
+        if fn.executable(candidate) == 1 then
+            return candidate
+        end
+    end
+    return nil
+end
+
+---@param value any
+---@return integer?
+local function integer(value)
+    local parsed = tonumber(value)
+    if parsed == nil then
+        return nil
+    end
+    return math.floor(parsed)
+end
+
+---@param parser function
+---@param output string
+---@param context LintContext
+---@return boolean
+---@return vim.Diagnostic.Set[]|string
+local function invoke_parser(parser, output, context)
+    local context_ok, context_result = pcall(parser, output, context)
+    if context_ok and type(context_result) == 'table' then
+        return true, context_result
+    end
+    local bufnr_ok, bufnr_result = pcall(parser, output, context.bufnr)
+    if bufnr_ok and type(bufnr_result) == 'table' then
+        return true, bufnr_result
+    end
+    local context_error = context_ok and ('returned ' .. type(context_result)) or tostring(context_result)
+    local bufnr_error = bufnr_ok and ('returned ' .. type(bufnr_result)) or tostring(bufnr_result)
+    return false, ('context parser: %s; buffer parser: %s'):format(context_error, bufnr_error)
+end
+
+---@param name string
+---@return integer
+local function namespace(name)
+    local existing = namespaces[name]
+    if existing ~= nil then
+        return existing
+    end
+    local created = api.nvim_create_namespace('linter.' .. name)
+    namespaces[name] = created
+    return created
+end
+
+---@param bufnr integer
+---@param markers? string[]
+---@return string
+local function project_root(bufnr, markers)
+    local filename = api.nvim_buf_get_name(bufnr)
+    return vim.fs.root(bufnr, markers or default_root_markers) or vim.fs.dirname(filename) or vim.uv.cwd() or '.'
+end
+
+---@param bufnr integer
+---@param definition Linter
+---@return LintContext
+local function context_for(bufnr, definition)
+    local raw_filename = api.nvim_buf_get_name(bufnr)
+    ---@type string
+    local filename = vim.fs.normalize(raw_filename) or raw_filename
+    ---@type string
+    local root = project_root(bufnr, definition.root_markers)
+    ---@type LintContext
+    local context = {
+        bufnr = bufnr,
+        cwd = root,
+        filename = filename,
+        filetype = vim.bo[bufnr].filetype,
+        modified = vim.bo[bufnr].modified == true,
+        root = root,
+    }
+    return context
+end
+
+---@param bufnr? integer
+---@return integer
+local function resolve_bufnr(bufnr)
+    if bufnr == nil or bufnr == 0 then
+        return api.nvim_get_current_buf()
+    end
+    return bufnr
+end
+
+---@param definition Linter
+---@param context LintContext
+---@return string
+local function resolve_cwd(definition, context)
+    local configured_cwd = definition.cwd
+    if type(configured_cwd) == 'function' then
+        return configured_cwd(context)
+    end
+    if type(configured_cwd) == 'string' then
+        return configured_cwd
+    end
+    return context.cwd
+end
+
+--- Everything one lint run needs after validation: the resolved definition,
+--- argv, process options, and the generation bookkeeping the completion
+--- handler uses to reject stale results.
+---@class LinterRunState
+---@field bufnr integer Target buffer.
+---@field changedtick integer Buffer changedtick captured at launch.
+---@field command string[] argv for `vim.system`.
+---@field context LintContext Resolved filename/root/cwd for the run.
+---@field definition Linter Loaded linter definition.
+---@field generation integer Run generation; bumps when a run is superseded.
+---@field key string Job registry key (`bufnr:name`).
+---@field name string Linter name.
+---@field opts LintRunOptions Caller options.
+---@field system_options table `vim.system` options.
+
+---@param name string
+---@param definition Linter
+---@return boolean
+local function runs_automatically(name, definition)
+    return definition.automatic ~= false and not M.manual_linters[name]
+end
+
+--- Validate a lint request and build its run state. Reports failures through
+--- `reject` (which also resets the namespace diagnostics and notifies) and
+--- returns nil on any failure; otherwise returns the state the launcher and
+--- the completion handler need. Starts no process.
+---@param name string
+---@param bufnr integer
+---@param opts LintRunOptions
+---@param reject fun(status: string, reason: string): boolean
+---@return LinterRunState?
+local function prepare_linter_run(name, bufnr, opts, reject)
+    if not buffer_is_eligible(bufnr) then
+        reject('unavailable', 'buffer is not eligible for native linting')
+        return nil
+    end
+
+    local definition = M.get_definition(name)
+    if type(definition) ~= 'table' then
+        diagnostic.reset(namespace(name), bufnr)
+        if opts.notify then
+            local reason = M.load_errors[name] or ('native linter %q is not registered'):format(name)
+            vim.notify(reason, vim.log.levels.ERROR, {
+                title = 'Native linters',
+            })
+        end
+        reject('unavailable', M.load_errors[name] or 'linter is not registered')
+        return nil
+    end
+    if opts.automatic and not runs_automatically(name, definition) then
+        diagnostic.reset(namespace(name), bufnr)
+        reject('unavailable', 'linter does not run automatically')
+        return nil
+    end
+
+    local context = context_for(bufnr, definition)
+
+    local configured_cmd = definition.cmd
+    ---@type string|string[]?
+    local cmd_spec = type(configured_cmd) ~= 'function' and configured_cmd or nil
+    if type(configured_cmd) == 'function' then
+        local ok, resolved = pcall(configured_cmd, context)
+        if ok and (type(resolved) == 'string' or type(resolved) == 'table') then
+            cmd_spec = resolved
+        end
+    end
+
+    local executable_name = cmd_spec ~= nil and executable(cmd_spec) or nil
+    if executable_name == nil then
+        diagnostic.reset(namespace(name), bufnr)
+        if opts.notify or (M.options.notify_missing and not missing_reported[name]) then
+            missing_reported[name] = true
+            ---@type string
+            local requested
+            if type(cmd_spec) == 'table' then
+                requested = table.concat(cmd_spec, ', ')
+            elseif type(cmd_spec) == 'string' then
+                requested = cmd_spec
+            else
+                requested = name
+            end
+            vim.notify(('Linter executable not found: %s'):format(requested), vim.log.levels.WARN)
+        end
+        reject('unavailable', 'linter executable is not installed')
+        return nil
+    end
+
+    if opts.root then
+        context.cwd = opts.root
+        context.root = opts.root
+    end
+    if context.modified and not definition.stdin then
+        diagnostic.reset(namespace(name), bufnr)
+        if opts.notify then
+            vim.notify(('%s reads the saved file; write the buffer before linting'):format(name), vim.log.levels.INFO)
+        end
+        reject('stale', 'linter reads disk but buffer has unsaved changes')
+        return nil
+    end
+    local command_ok, command_or_error = pcall(command_for, executable_name, definition, context)
+    if not command_ok then
+        diagnostic.reset(namespace(name), bufnr)
+        vim.notify(('%s command failed: %s'):format(name, tostring(command_or_error)), vim.log.levels.ERROR)
+        reject('error', tostring(command_or_error))
+        return nil
+    end
+    ---@cast command_or_error string[]
+    local command = command_or_error
+    local cwd_ok, cwd_or_error = pcall(resolve_cwd, definition, context)
+    if not cwd_ok or type(cwd_or_error) ~= 'string' then
+        diagnostic.reset(namespace(name), bufnr)
+        vim.notify(('%s cwd failed: %s'):format(name, tostring(cwd_or_error)), vim.log.levels.ERROR)
+        reject('error', tostring(cwd_or_error))
+        return nil
+    end
+    if opts.validate_context then
+        local valid, permitted = pcall(opts.validate_context, context, command, cwd_or_error)
+        if not valid then
+            reject('error', 'linter context rejected: ' .. tostring(permitted))
+            return nil
+        end
+        if permitted ~= true then
+            reject('error', 'linter context rejected: ' .. tostring(permitted))
+            return nil
+        end
+    end
+    diagnostic.reset(namespace(name), bufnr)
+    local key = ('%d:%s'):format(bufnr, name)
+    local previous = jobs[key]
+    if previous ~= nil then
+        pcall(previous.kill, previous, 15)
+        jobs[key] = nil
+    end
+    local generation = (generations[key] or 0) + 1
+    generations[key] = generation
+    local changedtick = api.nvim_buf_get_changedtick(bufnr)
+    local system_options = {
+        cwd = cwd_or_error,
+        env = vim.tbl_extend('keep', definition.env or {}, {
+            NO_COLOR = '1',
+        }),
+        stdin = definition.stdin and buffer_input(bufnr) or nil,
+        text = true,
+        timeout = opts.timeout or definition.timeout or 30000,
+    }
+    ---@type LinterRunState
+    local state = {
+        bufnr = bufnr,
+        changedtick = changedtick,
+        command = command,
+        context = context,
+        definition = definition,
+        generation = generation,
+        key = key,
+        name = name,
+        opts = opts,
+        system_options = system_options,
+    }
+    return state
+end
+
+---@param result vim.SystemCompleted
+---@param stream? LintStream
+---@return string
+local function result_output(result, stream)
+    if stream == 'stderr' then
+        return result.stderr or ''
+    end
+    if stream == 'both' then
+        local stdout = result.stdout or ''
+        local stderr = result.stderr or ''
+        if stdout == '' then
+            return stderr
+        end
+        if stderr == '' then
+            return stdout
+        end
+        return stdout .. '\n' .. stderr
+    end
+    -- vim.lint.Config-compatible default.
+    return result.stdout or ''
+end
+
+
+---@param value string
+---@return string
+local function strip_ansi(value)
+    local cleaned = value:gsub('\27%[[%d;?]*[ -/]*[@-~]', '')
+    return cleaned
+end
+
+---@param errorformat string|string[]
+---@return fun(output: string, context: LintContext|integer): vim.Diagnostic.Set[]
+local function errorformat_parser(errorformat)
+    local format = type(errorformat) == 'table' and table.concat(errorformat, ',') or errorformat
+    return function(output, _)
+        local parsed = fn.getqflist({
+            efm = format,
+            lines = vim.split(strip_ansi(output), '\n', {
+                plain = true,
+                trimempty = true,
+            }),
+        })
+        local diagnostics = {}
+        for _, item in ipairs(parsed.items or {}) do
+            if item.valid == 1 then
+                local item_type = type(item.type) == 'string' and item.type:upper() or 'E'
+                local end_line = integer(item.end_lnum)
+                local end_column = integer(item.end_col)
+                local number = integer(item.nr)
+                diagnostics[#diagnostics + 1] = {
+                    code = number and number > 0 and number or nil,
+                    col = math.max((integer(item.col) or 1) - 1, 0),
+                    end_col = end_column and end_column > 0 and end_column - 1 or nil,
+                    end_lnum = end_line and end_line > 0 and end_line - 1 or nil,
+                    lnum = math.max((integer(item.lnum) or 1) - 1, 0),
+                    message = item.text ~= '' and item.text or 'Unknown linter diagnostic',
+                    severity = severity_by_letter[item_type:sub(1, 1)] or diagnostic.severity.ERROR,
+                }
+            end
+        end
+        return diagnostics
+    end
+end
+
+---@param name string
+---@param bufnr integer
+---@param diagnostics vim.Diagnostic.Set[]
+local function publish(name, bufnr, diagnostics)
+    local line_count = math.max(api.nvim_buf_line_count(bufnr), 1)
+    for _, item in ipairs(diagnostics) do
+        item.lnum = math.min(math.max(integer(item.lnum) or 0, 0), line_count - 1)
+        local start_col = math.max(integer(item.col) or 0, 0)
+        item.col = start_col
+        if item.end_lnum ~= nil then
+            item.end_lnum = math.min(math.max(integer(item.end_lnum) or item.lnum, item.lnum), line_count - 1)
+        end
+        if item.end_col ~= nil then
+            item.end_col = math.max(integer(item.end_col) or start_col, start_col)
+        end
+        item.message = tostring(item.message or 'Unknown linter diagnostic')
+        item.severity = item.severity or diagnostic.severity.ERROR
+        item.source = name
+    end
+    diagnostic.set(namespace(name), bufnr, diagnostics)
+end
+
+--- Scheduled completion handler for one lint run. Rejects stale
+--- generations, dead buffers and mid-flight edits before publishing, then
+--- translates the process result into a single terminal `finish` call.
+--- `job` is read from the launcher's upvalue at callback time, matching the
+--- previous inline closure.
+---@param state LinterRunState
+---@param finish fun(status: string, fields?: table)
+---@param job? vim.SystemObj
+---@param result vim.SystemCompleted
+local function on_linter_result(state, finish, job, result)
+    local name = state.name
+    local bufnr = state.bufnr
+    local key = state.key
+    local generation = state.generation
+    local changedtick = state.changedtick
+    local context = state.context
+    local definition = state.definition
+    if generations[key] ~= generation then
+        finish('stale', { changedtick = changedtick, reason = 'run was cancelled or superseded' })
+        return
+    end
+    if jobs[key] == job then
+        jobs[key] = nil
+    end
+    if not api.nvim_buf_is_valid(bufnr) then
+        finish('stale', { changedtick = changedtick, reason = 'buffer was removed' })
+        return
+    end
+    if api.nvim_buf_get_changedtick(bufnr) ~= changedtick then
+        finish('stale', {
+            changedtick = changedtick,
+            reason = 'buffer changed while linting',
+        })
+        return
+    end
+    if api.nvim_buf_get_name(bufnr) ~= context.filename then
+        finish('stale', {
+            changedtick = changedtick,
+            reason = 'buffer changed while linting',
+        })
+        return
+    end
+    if result.code == TIMEOUT_EXIT_CODE then
+        finish('timeout', {
+            changedtick = changedtick,
+            exit_code = result.code,
+            signal = result.signal,
+        })
+        return
+    end
+    if (result.signal or 0) ~= 0 then
+        finish('failed', {
+            exit_code = result.code,
+            reason = 'linter terminated by signal',
+            signal = result.signal,
+        })
+        return
+    end
+
+    local output = result_output(result, definition.stream)
+    local parser = definition.parser or (definition.errorformat and errorformat_parser(definition.errorformat))
+    if parser == nil then
+        publish(name, bufnr, {})
+        vim.notify(('Linter %q has no parser or errorformat'):format(name), vim.log.levels.ERROR)
+        finish('error', {
+            exit_code = result.code,
+            reason = 'linter has no parser or errorformat',
+        })
+        return
+    end
+    local parse_ok, parsed_or_error = invoke_parser(parser, output, context)
+    if not parse_ok then
+        publish(name, bufnr, {})
+        vim.notify(('%s parser failed: %s'):format(name, tostring(parsed_or_error)), vim.log.levels.ERROR)
+        finish('error', {
+            exit_code = result.code,
+            reason = tostring(parsed_or_error),
+        })
+        return
+    end
+    ---@cast parsed_or_error vim.Diagnostic.Set[]
+    local parsed = parsed_or_error
+    if not vim.islist(parsed) then
+        finish('error', {
+            exit_code = result.code,
+            reason = 'linter parser must return a diagnostic array',
+        })
+        return
+    end
+    local published, publish_error = pcall(publish, name, bufnr, parsed)
+    if not published then
+        finish('error', {
+            exit_code = result.code,
+            reason = tostring(publish_error),
+        })
+        return
+    end
+    if not api.nvim_buf_is_valid(bufnr) then
+        finish('stale', {
+            changedtick = changedtick,
+            reason = 'buffer changed while publishing diagnostics',
+        })
+        return
+    end
+    if api.nvim_buf_get_changedtick(bufnr) ~= changedtick then
+        finish('stale', {
+            changedtick = changedtick,
+            reason = 'buffer changed while publishing diagnostics',
+        })
+        return
+    end
+    if not accepts_exit_code(definition, result.code) and #parsed == 0 then
+        local detail = vim.trim(strip_ansi(output))
+        if #detail > 300 then
+            detail = detail:sub(1, 300) .. '…'
+        end
+        vim.notify(
+            ('%s failed with exit code %s%s'):format(
+                name,
+                tostring(result.code),
+                detail ~= '' and (': ' .. detail) or ''
+            ),
+            vim.log.levels.ERROR
+        )
+    end
+    local status
+    local reason
+    if #parsed > 0 or not accepts_exit_code(definition, result.code) then
+        status = 'failed'
+    elseif result.code == 0 then
+        status = 'ok'
+    else
+        status = 'unverified'
+        reason = 'accepted nonzero exit without parsed diagnostics is not a clean check'
+    end
+    finish(status, {
+        changedtick = changedtick,
+        diagnostics = parsed,
+        exit_code = result.code,
+        namespace = namespace(name),
+        reason = reason,
+        signal = result.signal,
+        stderr = (result.stderr or ''):sub(1, OUTPUT_BYTES_MAX),
+        stdout = (result.stdout or ''):sub(1, OUTPUT_BYTES_MAX),
+    })
+end
+
+---@param bufnr? integer
+---@param opts? { automatic?: boolean, notify?: boolean }
+---@param names? string[]
+---@return nil
+function M.run(bufnr, opts, names)
+    bufnr = resolve_bufnr(bufnr)
+    if not M.options.enabled or not buffer_is_eligible(bufnr) then
+        return
+    end
+    local selected = names or configured_linters(bufnr)
+    local active = {}
+    for _, name in ipairs(selected) do
+        active[name] = true
+        M.run_linter(name, bufnr, opts)
+    end
+    if names == nil then
+        for name, ns in pairs(namespaces) do
+            if not active[name] then
+                diagnostic.reset(ns, bufnr)
+            end
+        end
+    end
+end
+
+---@class LintRunOptions
+---@field automatic? boolean
+---@field notify? boolean
+---@field on_complete? fun(result: table)
+---@field root? string
+---@field timeout? number
+---@field validate_context? fun(context: LintContext, command: string[], cwd: string): boolean
+
+---@param name string
+---@param bufnr? integer
+---@param opts? LintRunOptions
+---@return boolean started
+---@return table? handle # Per-run cancellation handle when started.
+function M.run_linter(name, bufnr, opts)
+    opts = opts or {}
+    vim.validate({
+        name = {
+            name,
+            'string',
+        },
+        on_complete = { opts.on_complete, 'function', true },
+        opts = { opts, 'table' },
+        root = { opts.root, 'string', true },
+        timeout = { opts.timeout, 'number', true },
+        validate_context = { opts.validate_context, 'function', true },
+    })
+    if opts.timeout ~= nil then
+        assert(opts.timeout > 0, 'timeout must be a positive number of milliseconds')
+    end
+    bufnr = resolve_bufnr(bufnr)
+    local completed = false
+    local function finish(status, fields)
+        if completed then
+            return
+        end
+        completed = true
+        local result = vim.tbl_extend('force', {
+            bufnr = bufnr,
+            name = name,
+            status = status,
+            verified = status == 'ok',
+        }, fields or {})
+        if opts.on_complete then
+            local ok, err = pcall(opts.on_complete, result)
+            if not ok then
+                vim.schedule(function()
+                    vim.notify(tostring(err), vim.log.levels.ERROR)
+                end)
+            end
+        end
+    end
+    local function reject(status, reason)
+        finish(status, { reason = reason })
+        return false
+    end
+    local state = prepare_linter_run(name, bufnr, opts, reject)
+    if state == nil then
+        return false
+    end
+
+    local job
+    local started, job_or_error = pcall(vim.system, state.command, state.system_options, function(result)
+        vim.schedule(function()
+            on_linter_result(state, finish, job, result)
+        end)
+    end)
+    if not started then
+        return reject('error', tostring(job_or_error))
+    end
+    job = job_or_error
+    jobs[state.key] = job
+    local handle = {
+        cancel = function(status)
+            if not completed and generations[state.key] == state.generation then
+                generations[state.key] = state.generation + 1
+                if jobs[state.key] == job then
+                    jobs[state.key] = nil
+                end
+                if job ~= nil then
+                    pcall(job.kill, job, SIGTERM)
+                end
+            end
+            finish(status or 'stale', { reason = 'run cancelled by caller', changedtick = state.changedtick })
+        end,
+    }
+    return true, handle
+end
+
+---@param bufnr integer
+local function cancel_timer(bufnr)
+    local timer = timers[bufnr]
+    if timer == nil then
+        return
+    end
+    timers[bufnr] = nil
+    if not timer:is_closing() then
+        timer:stop()
+        timer:close()
+    end
+end
+
+---@param bufnr integer
+---@param immediate? boolean
+local function schedule(bufnr, immediate)
+    cancel_timer(bufnr)
+    if immediate then
+        M.run(bufnr, { automatic = true })
+        return
+    end
+    timers[bufnr] = vim.defer_fn(function()
+        timers[bufnr] = nil
+        M.run(bufnr, {
+            automatic = true,
+        })
+    end, M.options.debounce_ms)
+end
+
+---@param bufnr? integer
+---@return nil
+function M.reset(bufnr)
+    bufnr = resolve_bufnr(bufnr)
+    M.stop(bufnr)
+    for _, ns in pairs(namespaces) do
+        diagnostic.reset(ns, bufnr)
+    end
+end
+
+---@param bufnr? integer
+---@return nil
+function M.stop(bufnr)
+    bufnr = resolve_bufnr(bufnr)
+    cancel_timer(bufnr)
+    local prefix = tostring(bufnr) .. ':'
+    for key, job in pairs(jobs) do
+        if key:sub(1, #prefix) == prefix then
+            generations[key] = (generations[key] or 0) + 1
+            pcall(job.kill, job, 15)
+            jobs[key] = nil
+        end
+    end
+end
+
+---@param name string
+---@param definition Linter
+---@return nil
+function M.register(name, definition)
+    vim.validate({
+        name = { name, 'string' },
+        definition = { definition, 'table' },
+    })
+    M.definitions[name] = definition
+    M.load_errors[name] = nil
+    missing_reported[name] = nil
+end
+
+---Every field a linter definition may carry. Unmarked fields are read by
+---the framework; adapter-local fields are consumed by the adapter's own
+---functions. Anything else is a typo until registered here, so a
+---misspelled field can never silently neuter a linter again (`parse`
+---instead of `parser` cost android_lint its diagnostics; `ignoreexitcode`
+---and `rootmarkers` cost chktex and commitlint their knobs).
+---Programmatic linters with bespoke fields extend M.known_definition_fields.
+---@type table<string, boolean>
+local known_definition_fields = {
+    active_rules = true, -- adapter-local
+    append_fname = true,
+    args = true,
+    automatic = true,
+    available_rules = true, -- adapter-local
+    cli_choices = true,   -- adapter-local
+    cmd = true,
+    condition = true,     -- adapter-local
+    cwd = true,
+    deprecated_rules = true, -- adapter-local
+    env = true,
+    errorformat = true,
+    exit_codes = true,
+    fixable_rules = true, -- adapter-local
+    ignore_exitcode = true,
+    meta = true,
+    name = true,
+    parser = true,
+    parser_mode = true, -- adapter-local
+    root_markers = true,
+    rule_aliases = true, -- adapter-local
+    rule_levels = true, -- adapter-local
+    schema = true,
+    setup = true,     -- adapter-local
+    stdin = true,
+    stream = true,
+    timeout = true,
+    transform_buffer = true, -- adapter-local
+}
+
+M.known_definition_fields = known_definition_fields
+
+---@type integer Unknown fields within this distance earn a hint.
+local SUGGESTION_DISTANCE_MAX = 2
+
+---Levenshtein distance over short field names. The two-row program touches
+---at most (#a + 1) * (#b + 1) cells and bails out early once the distance
+---provably exceeds the hint threshold.
+---@param a string
+---@param b string
+---@return integer
+local function field_distance(a, b)
+    if math.abs(#a - #b) > SUGGESTION_DISTANCE_MAX then
+        return SUGGESTION_DISTANCE_MAX + 1
+    end
+    local prev, curr = {}, {}
+    for j = 0, #b do
+        prev[j] = j
+    end
+    for i = 1, #a do
+        curr[0] = i
+        local row_min = i
+        local a_byte = a:byte(i)
+        for j = 1, #b do
+            local cost = (a_byte == b:byte(j)) and 0 or 1
+            local best = prev[j] + 1
+            if curr[j - 1] + 1 < best then
+                best = curr[j - 1] + 1
+            end
+            if prev[j - 1] + cost < best then
+                best = prev[j - 1] + cost
+            end
+            curr[j] = best
+            if best < row_min then
+                row_min = best
+            end
+        end
+        if row_min > SUGGESTION_DISTANCE_MAX then
+            return SUGGESTION_DISTANCE_MAX + 1
+        end
+        prev, curr = curr, prev
+    end
+    return prev[#b]
+end
+
+---Closest known field to an unknown one, or nil when nothing is near.
+---@param unknown string
+---@return string?
+local function suggest_field(unknown)
+    local best, best_distance = nil, SUGGESTION_DISTANCE_MAX + 1
+    for field, _ in pairs(known_definition_fields) do
+        local distance = field_distance(unknown, field)
+        if distance < best_distance then
+            best, best_distance = field, distance
+        end
+    end
+    return best
+end
+
+---@return string[]
+function M.validate()
+    local problems = {}
+    local valid_streams = {
+        both = true,
+        stderr = true,
+        stdout = true,
+    }
+
+    for name, message in pairs(M.load_errors) do
+        problems[#problems + 1] = ('linter %q: %s'):format(name, message)
+    end
+
+    for filetype, names in pairs(M.linters_by_ft) do
+        if type(names) ~= 'table' then
+            problems[#problems + 1] = ('filetype %q must map to a list'):format(filetype)
+        else
+            local seen = {}
+            for _, name in ipairs(names) do
+                if seen[name] then
+                    problems[#problems + 1] = ('filetype %q repeats %q'):format(filetype, name)
+                end
+                seen[name] = true
+                if type(M.definitions[name]) ~= 'table' then
+                    problems[#problems + 1] = ('filetype %q references undefined linter %q'):format(filetype, name)
+                end
+            end
+        end
+    end
+
+    for name, definition in pairs(M.definitions) do
+        if type(definition) ~= 'table' then
+            problems[#problems + 1] = ('linter %q has type %s instead of table'):format(name, type(definition))
+        else
+            local cmd_type = type(definition.cmd)
+            if cmd_type ~= 'string' and cmd_type ~= 'table' and cmd_type ~= 'function' then
+                problems[#problems + 1] = ('linter %q has an invalid cmd'):format(name)
+            end
+            if definition.parser == nil and definition.errorformat == nil then
+                problems[#problems + 1] = ('linter %q has no parser or errorformat'):format(name)
+            end
+            if definition.stream ~= nil and not valid_streams[definition.stream] then
+                problems[#problems + 1] = ('linter %q has invalid stream %q'):format(name, definition.stream)
+            end
+            for field, _ in pairs(definition) do
+                if not known_definition_fields[field] then
+                    local hint = suggest_field(field)
+                    if hint ~= nil then
+                        problems[#problems + 1] = ('linter %q has unknown field %q (did you mean %q?)'):format(
+                            name,
+                            field,
+                            hint
+                        )
+                    else
+                        problems[#problems + 1] = ('linter %q has unknown field %q'):format(name, field)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Orphan check: every adapter file under lua/linters/ must be registered
+    -- in M.module_sources (or explicitly listed in M.unregistered_adapters),
+    -- otherwise the runner can never load it.
+    local source = debug.getinfo(1, 'S').source
+    if type(source) == 'string' and source:sub(1, 1) == '@' then
+        local dir = vim.fn.fnamemodify(source:sub(2), ':h')
+        local registered = {}
+        for _, module_name in pairs(M.module_sources) do
+            registered[module_name] = true
+        end
+        for entry, entry_type in vim.fs.dir(dir) do
+            if entry_type == 'file' and entry:sub(-4) == '.lua' then
+                local base = entry:sub(1, -5)
+                if base ~= 'init' and base ~= 'update' and base ~= '_sandbox' then
+                    local module_name = 'linters.' .. base
+                    if not registered[module_name] and not M.unregistered_adapters[module_name] then
+                        problems[#problems + 1] = ('adapter %q is on disk but not registered in module_sources'):format(
+                            module_name
+                        )
+                    end
+                end
+            end
+        end
+    end
+
+    table.sort(problems)
+    return problems
+end
+
+---@return string[]
+local function registered_names()
+    ---@type table<string, boolean>
+    local seen = {}
+    for name in pairs(M.module_sources) do
+        seen[name] = true
+    end
+    for name in pairs(M.definitions) do
+        seen[name] = true
+    end
+    ---@type string[]
+    local names = vim.tbl_keys(seen)
+    table.sort(names)
+    return names
+end
+
+---@param bufnr? integer
+---@param include_all? boolean
+---@return string
+function M.info(bufnr, include_all)
+    bufnr = resolve_bufnr(bufnr)
+    if not api.nvim_buf_is_valid(bufnr) then
+        return 'Invalid buffer'
+    end
+
+    local filetype = vim.bo[bufnr].filetype
+    local configured = include_all and registered_names() or configured_linters(bufnr)
+    local lines = {
+        ('Buffer: %d'):format(bufnr),
+        ('Filetype: %s'):format(filetype ~= '' and filetype or '<none>'),
+        ('Automatic linting: %s'):format(
+            M.options.enabled and not vim.b[bufnr].lint_disabled and 'enabled' or 'disabled'
+        ),
+        include_all and 'Registered linters:' or 'Configured linters:',
+    }
+    if #configured == 0 then
+        lines[#lines + 1] = '  <none>'
+    end
+    for _, name in ipairs(configured) do
+        local definition = M.definitions[name]
+        if type(definition) ~= 'table' then
+            lines[#lines + 1] = ('  %s: unavailable (%s)'):format(name, M.load_errors[name] or 'invalid definition')
+        else
+            local context = context_for(bufnr, definition)
+            local configured_cmd = definition.cmd
+            ---@type string|string[]?
+            local cmd_spec = type(configured_cmd) ~= 'function' and configured_cmd or nil
+            if type(configured_cmd) == 'function' then
+                local ok, resolved_cmd = pcall(configured_cmd, context)
+                if ok and (type(resolved_cmd) == 'string' or type(resolved_cmd) == 'table') then
+                    cmd_spec = resolved_cmd
+                end
+            end
+            local resolved = cmd_spec ~= nil and executable(cmd_spec) or nil
+            local mode = runs_automatically(name, definition) and 'automatic' or 'manual'
+            lines[#lines + 1] = ('  %s: %s (%s)'):format(name, resolved or 'missing', mode)
+        end
+    end
+    return table.concat(lines, '\n')
+end
+
+---@param arglead string
+---@return string[]
+local function complete_linter(arglead)
+    local matches = {}
+    for _, name in ipairs(registered_names()) do
+        if arglead == '' or vim.startswith(name, arglead) then
+            matches[#matches + 1] = name
+        end
+    end
+    return matches
+end
+
+---@param opts? LintSetupOptions
+---@return nil
+function M.setup(opts)
+    if opts ~= nil then
+        local merged = vim.tbl_deep_extend('force', M.options, opts)
+        ---@cast merged LintOptions
+        M.options = merged
+    end
+
+    local problems = M.validate()
+    if #problems > 0 then
+        vim.notify(table.concat(problems, '\n'), vim.log.levels.ERROR, {
+            title = 'Native linter configuration',
+        })
+    end
+
+    local group = api.nvim_create_augroup('native_linters', {
+        clear = true,
+    })
+    api.nvim_create_autocmd(M.options.events, {
+        callback = function(event)
+            if M.options.enabled and buffer_is_eligible(event.buf) then
+                schedule(event.buf, event.event == 'BufWritePost')
+            end
+        end,
+        desc = 'Run native asynchronous linters',
+        group = group,
+    })
+    api.nvim_create_autocmd('BufWipeout', {
+        callback = function(event)
+            M.stop(event.buf)
+        end,
+        desc = 'Stop native linters and release buffer state',
+        group = group,
+    })
+    api.nvim_create_user_command('Lint', function(command)
+        if #command.fargs == 0 then
+            M.run(0, { notify = command.bang })
+            return
+        end
+        M.run(0, { notify = true }, command.fargs)
+    end, {
+        bang = true,
+        complete = complete_linter,
+        desc = 'Lint the current buffer with configured or named linters',
+        force = true,
+        nargs = '*',
+    })
+    api.nvim_create_user_command('LintDisable', function()
+        vim.b.lint_disabled = true
+        M.reset(0)
+    end, {
+        desc = 'Disable native linting for the current buffer',
+        force = true,
+    })
+    api.nvim_create_user_command('LintEnable', function()
+        vim.b.lint_disabled = false
+        M.run(0, { notify = true })
+    end, {
+        desc = 'Enable native linting for the current buffer',
+        force = true,
+    })
+    api.nvim_create_user_command('LintInfo', function(command)
+        vim.notify(M.info(0, command.bang), vim.log.levels.INFO, {
+            title = 'Native linters',
+        })
+    end, {
+        bang = true,
+        desc = 'Show configured linters; use bang to show every registered linter',
+        force = true,
+    })
+    api.nvim_create_user_command('LintReset', function()
+        M.reset(0)
+    end, {
+        desc = 'Stop native linters and clear their diagnostics',
+        force = true,
+    })
+    api.nvim_create_user_command('LintValidate', function()
+        local validation_problems = M.validate()
+        local message = #validation_problems == 0 and 'Native linter configuration is valid'
+            or table.concat(validation_problems, '\n')
+        vim.notify(message, #validation_problems == 0 and vim.log.levels.INFO or vim.log.levels.ERROR, {
+            title = 'Native linters',
+        })
+    end, {
+        desc = 'Validate the native linter registry',
+        force = true,
+    })
+end
+
+return M
