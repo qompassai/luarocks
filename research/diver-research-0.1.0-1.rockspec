@@ -2,7 +2,7 @@ package = 'diver-research'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'research',
+    dir = 'luarocks/research',
 }
 description = {
     summary = 'Diver research workflow: research.* journal registry, ORCID, OpenAlex, Web of Science, Zenodo, deadlines, watchlist, templates, Zotero.',

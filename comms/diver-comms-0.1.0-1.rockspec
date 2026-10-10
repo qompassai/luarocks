@@ -2,7 +2,7 @@ package = 'diver-comms'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'comms',
+    dir = 'luarocks/comms',
 }
 description = {
     summary = 'Diver mail tooling: comms.* clients (aerc, neomutt), mail and MIME helpers.',

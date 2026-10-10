@@ -2,7 +2,7 @@ package = 'diver-ai'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'ai',
+    dir = 'luarocks/ai',
 }
 description = {
     summary = 'Diver AI suite: ai.* harness (registry/supervisor/policy), MCP, ACP, A2A, herd, rose integration, media, recon, plus salesforce.mcp.',

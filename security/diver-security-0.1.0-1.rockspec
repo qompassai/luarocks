@@ -2,7 +2,7 @@ package = 'diver-security'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'security',
+    dir = 'luarocks/security',
 }
 description = {
     summary = 'Diver security toolkit: security.* RCE/MiTM/zombie/supply-chain guards, red/blue suites, pass integration, Ghidra bridge, PQC tokens.',

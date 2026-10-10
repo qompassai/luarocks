@@ -2,7 +2,7 @@ package = 'diver-dap'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'dap',
+    dir = 'luarocks/dap',
 }
 description = {
     summary = 'Diver debug-adapter suite: dap.* session engine, adapters, store, lifecycle and integrations (Moonwalk, phlow).',

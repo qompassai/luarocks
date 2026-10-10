@@ -2,7 +2,7 @@ package = 'diver-dev'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'dev',
+    dir = 'luarocks/dev',
 }
 description = {
     summary = 'Diver developer tooling: dev.* BSP servers, SCIP indexers, browser (BiDi/CDP), apps, Salesforce suite, git/jj/cargo runners.',

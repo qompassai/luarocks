@@ -2,7 +2,7 @@ package = 'diver-games'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'games',
+    dir = 'luarocks/games',
 }
 description = {
     summary = 'Diver game-engine tooling: games.* for Aseprite, Blender, Godot, LÖVE, Redot, TIC-80, Unity, Unreal and Voidsprite, plus shared character kit.',

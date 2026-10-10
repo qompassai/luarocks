@@ -2,7 +2,7 @@ package = 'diver-utils'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'utils',
+    dir = 'luarocks/utils',
 }
 description = {
     summary = 'Diver foundations: shared utility library (utils.*), tools.*, plus the shared primitives other diver rocks build on (security.rce safe-exec, research.docs header builder, config.core.parser).',

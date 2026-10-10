@@ -2,7 +2,7 @@ package = 'diver-config'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'config',
+    dir = 'luarocks/config',
 }
 description = {
     summary = 'Diver config library modules: config.ui.* (UI library: icons, image rendering, themes, virtual text) and config.data.* (database adapters).',

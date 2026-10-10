@@ -2,7 +2,7 @@ package = 'diver-lintfmt'
 version = '0.1.0-1'
 source = {
     url = 'git+https://github.com/qompassai/luarocks.git',
-    dir = 'lintfmt',
+    dir = 'luarocks/lintfmt',
 }
 description = {
     summary = 'Diver tool catalogs: formatters.* (138 formatter adapters + engine) and linters.* (185 linter adapters + engine). One adapter per file.',
