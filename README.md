@@ -4,7 +4,7 @@
 
 > Standalone LuaRocks distributions of the diver Neovim config's library modules.
 
-![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
+<a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
 
 [diver](https://github.com/qompassai/diver) is a large Neovim configuration
 whose Lua is organized as library-grade subsystems. This repo packages every
